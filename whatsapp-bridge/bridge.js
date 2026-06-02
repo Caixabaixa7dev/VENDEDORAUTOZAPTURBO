@@ -1,9 +1,8 @@
 const express = require('express');
-const { makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore, DisconnectReason } = require('@whiskeysockets/baileys');
+const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
-const pino = require('pino');
-const fs = require('fs');
 const path = require('path');
+const fs = require('fs');
 
 const PORT = process.env.PORT || 8080;
 const BOT_WEBHOOK_URL = process.env.BOT_WEBHOOK_URL || 'http://localhost:10000/webhook';
@@ -16,101 +15,93 @@ if (!fs.existsSync(SESSION_DIR)) {
 const app = express();
 app.use(express.json());
 
-let sock = null;
+const client = new Client({
+  authStrategy: new LocalAuth({ dataPath: SESSION_DIR }),
+  puppeteer: {
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--no-first-run',
+      '--no-zygote',
+      '--single-process',
+      '--disable-gpu',
+    ],
+  },
+  webVersionCache: {
+    type: 'remote',
+    remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+  },
+});
+
 let qrCodeData = null;
 let connectionState = 'disconnected';
 
-async function start() {
-  const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
+client.on('qr', (qr) => {
+  qrCodeData = qr;
+  qrcode.generate(qr, { small: true });
+  connectionState = 'awaiting_qr';
+  console.log('[QR] New QR code generated. Scan with WhatsApp.');
+});
 
-  sock = makeWASocket({
-    auth: {
-      creds: state.creds,
-      keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
-    },
-    printQRInTerminal: false,
-    logger: pino({ level: 'silent' }),
-    browser: ['ZAPTURBO', 'Chrome', '1.0.0'],
-  });
+client.on('ready', () => {
+  connectionState = 'connected';
+  qrCodeData = null;
+  console.log('[CONNECTED] WhatsApp connected!');
+  console.log(`[PHONE] ${client.info.wid.user}`);
+});
 
-  sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect, qr } = update;
+client.on('disconnected', (reason) => {
+  connectionState = 'disconnected';
+  console.log(`[DISCONNECTED] Reason: ${reason}`);
+  setTimeout(() => client.initialize(), 10000);
+});
 
-    if (qr) {
-      qrCodeData = qr;
-      qrcode.generate(qr, { small: true });
-      connectionState = 'awaiting_qr';
-      console.log('[QR] New QR code generated. Scan with WhatsApp.');
-    }
+client.on('message', async (message) => {
+  if (message.fromMe) return;
 
-    if (connection === 'open') {
-      connectionState = 'connected';
-      qrCodeData = null;
-      console.log('[CONNECTED] WhatsApp connected!');
-      console.log(`[PHONE] ${sock.user.id}`);
-    }
+  const phone = message.from.replace('@c.us', '').replace('@s.whatsapp.net', '');
+  const body = message.body;
+  const name = message._data?.notifyName || 'Cliente';
 
-    if (connection === 'close') {
-      const reason = lastDisconnect?.error?.output?.statusCode;
-      connectionState = 'disconnected';
-      console.log(`[DISCONNECTED] Reason: ${DisconnectReason[reason] || reason}`);
+  console.log(`[MSG] ${phone} (${name}): ${body.substring(0, 60)}`);
 
-      if (reason === DisconnectReason.loggedOut) {
-        console.log('[LOGGED OUT] Clearing session...');
-        fs.rmSync(SESSION_DIR, { recursive: true, force: true });
-        fs.mkdirSync(SESSION_DIR, { recursive: true });
-      }
-
-      setTimeout(() => start(), 5000);
-    }
-  });
-
-  sock.ev.on('creds.update', saveCreds);
-
-  sock.ev.on('messages.upsert', async (msg) => {
-    const message = msg.messages[0];
-    if (!message || message.key.fromMe) return;
-    if (!message.message?.conversation && !message.message?.extendedTextMessage) return;
-
-    const phone = message.key.remoteJid.replace('@s.whatsapp.net', '').replace('@c.us', '');
-    const body = message.message?.conversation || message.message?.extendedTextMessage?.text || '';
-    const name = message.pushName || 'Cliente';
-
-    console.log(`[MSG] ${phone} (${name}): ${body.substring(0, 60)}`);
-
-    try {
-      const resp = await fetch(BOT_WEBHOOK_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          event: 'message.create',
-          data: {
-            key: { remoteJid: message.key.remoteJid },
-            message: { conversation: body },
-            pushName: name,
-          },
-        }),
-        signal: AbortSignal.timeout(10000),
-      });
-    } catch (err) {
-      console.error('[WEBHOOK ERROR]', err.message);
-    }
-  });
-}
+  try {
+    const resp = await fetch(BOT_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        event: 'message.create',
+        data: {
+          key: { remoteJid: message.from },
+          message: { conversation: body },
+          pushName: name,
+        },
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch (err) {
+    console.error('[WEBHOOK ERROR]', err.message);
+  }
+});
 
 app.get('/', (req, res) => {
   res.json({
     status: connectionState,
     qr: qrCodeData,
-    phone: sock?.user?.id || null,
+    phone: client.info?.wid?.user || null,
   });
 });
 
 app.get('/qr', (req, res) => {
   if (qrCodeData) {
     res.json({ qr: qrCodeData, state: connectionState });
+  } else if (connectionState === 'connected') {
+    res.json({ qr: null, state: 'connected', message: 'Already connected!' });
   } else {
-    res.json({ qr: null, state: connectionState, message: 'Already connected or starting...' });
+    res.json({ qr: null, state: connectionState, message: 'Starting up, check logs for QR...' });
   }
 });
 
@@ -121,8 +112,8 @@ app.post('/send', async (req, res) => {
   }
 
   try {
-    const chatId = `${to.replace(/\D/g, '')}@s.whatsapp.net`;
-    await sock.sendMessage(chatId, { text });
+    const chatId = `${to.replace(/\D/g, '')}@c.us`;
+    await client.sendMessage(chatId, text);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -136,26 +127,19 @@ app.post('/send-image', async (req, res) => {
   }
 
   try {
-    const chatId = `${to.replace(/\D/g, '')}@s.whatsapp.net`;
-    const response = await fetch(imageUrl);
-    const buffer = await response.arrayBuffer();
-    const base64 = Buffer.from(buffer).toString('base64');
-    const mime = response.headers.get('content-type') || 'image/jpeg';
-
-    await sock.sendMessage(chatId, {
-      image: Buffer.from(base64, 'base64'),
-      caption: caption || '',
-      mimetype: mime,
-    });
+    const chatId = `${to.replace(/\D/g, '')}@c.us`;
+    const media = await MessageMedia.fromUrl(imageUrl);
+    await client.sendMessage(chatId, media, { caption: caption || '' });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-start();
-
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[BRIDGE] Running on port ${PORT}`);
   console.log(`[BRIDGE] Webhook: ${BOT_WEBHOOK_URL}`);
 });
+
+console.log('[BRIDGE] Initializing WhatsApp client...');
+client.initialize();

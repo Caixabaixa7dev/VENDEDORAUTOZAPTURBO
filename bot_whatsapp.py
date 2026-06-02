@@ -10,7 +10,7 @@ from models import (
     Product, ProductVariant, Customer, Order, OrderItem,
     Wallet, OrderStatus,
 )
-from evolution_client import send_text
+import cloud_api
 from pix_gateway import create_pix_deposit, generate_external_id
 from correios_api import calcular_frete, format_frete_info
 from catalog_seeder import seed_database
@@ -28,33 +28,27 @@ _conversation_history = {}
 
 
 async def handle_webhook(request):
+    if request.method == "GET":
+        challenge = cloud_api.verify_webhook(request.query)
+        if challenge:
+            return web.Response(text=challenge)
+        return web.Response(text="Verification failed", status=403)
+
     try:
         body = await request.json()
-        event = body.get("event", "")
 
-        if event == "message.create":
-            data = body.get("data", {})
-            key = data.get("key", {})
-            message = data.get("message", {})
-            push_name = data.get("pushName", "Cliente")
-            phone = key.get("remoteJid", "").replace("@s.whatsapp.net", "").replace("@c.us", "")
+        msg = cloud_api.extract_message(body)
+        if not msg:
+            return web.json_response({"status": "ok"})
 
-            if not phone:
-                return web.json_response({"status": "ok"})
+        phone = msg["phone"]
+        text = msg["text"]
+        name = msg["name"]
 
-            msg_text = ""
-            if message.get("conversation"):
-                msg_text = message["conversation"]
-            elif message.get("extendedTextMessage", {}).get("text"):
-                msg_text = message["extendedTextMessage"]["text"]
-
-            if not msg_text:
-                return web.json_response({"status": "ok"})
-
-            if msg_text.startswith("/"):
-                await handle_command(phone, msg_text, push_name)
-            else:
-                await handle_message(phone, msg_text, push_name)
+        if text.startswith("/"):
+            await handle_command(phone, text, name)
+        else:
+            await handle_message(phone, text, name)
 
         return web.json_response({"status": "ok"})
     except Exception as e:
@@ -67,7 +61,7 @@ async def handle_command(phone: str, command: str, push_name: str):
     cmd = cmd_parts[0].lower()
 
     if cmd == "/start" or cmd == "/menu":
-        await send_text(phone, (
+        await cloud_api.send_text(phone, (
             "🛍️ *Bem-vindo à ZAPTURBO!* 🛍️\n\n"
             "Sou seu atendente virtual de moda masculina.\n"
             "Pode me dizer o que você está procurando ou escolher uma opção:\n\n"
@@ -86,7 +80,7 @@ async def handle_command(phone: str, command: str, push_name: str):
             products = result.scalars().all()
 
             if not products:
-                await send_text(phone, "📭 Catálogo vazio no momento. Volte em breve!")
+                await cloud_api.send_text(phone, "📭 Catálogo vazio no momento. Volte em breve!")
                 return
 
             categorias = {}
@@ -101,13 +95,13 @@ async def handle_command(phone: str, command: str, push_name: str):
                 msg += "\n"
 
             msg += "Quer ver detalhes de algum? Me fala o nome! 😊"
-            await send_text(phone, msg)
+            await cloud_api.send_text(phone, msg)
 
     elif cmd == "/saldo":
         async with async_session() as session:
             wallet = await session.get(Wallet, phone)
             balance = wallet.balance if wallet else 0.0
-            await send_text(phone, f"💰 *Saldo atual:* R$ {balance:.2f}")
+            await cloud_api.send_text(phone, f"💰 *Saldo atual:* R$ {balance:.2f}")
 
     elif cmd == "/pedidos":
         async with async_session() as session:
@@ -125,7 +119,7 @@ async def handle_command(phone: str, command: str, push_name: str):
             orders = result.scalars().all()[:5]
 
             if not orders:
-                await send_text(phone, "📋 Nenhum pedido encontrado.")
+                await cloud_api.send_text(phone, "📋 Nenhum pedido encontrado.")
                 return
 
             msg = "📋 *Seus Pedidos*\n\n"
@@ -136,11 +130,11 @@ async def handle_command(phone: str, command: str, push_name: str):
                     msg += f"📦 Rastreio: {o.codigo_rastreio}\n"
                 msg += "\n"
 
-            await send_text(phone, msg)
+            await cloud_api.send_text(phone, msg)
 
     elif cmd == "/admin" and cmd_parts:
         if not is_admin(phone):
-            await send_text(phone, "⛔ Comando restrito a administradores.")
+            await cloud_api.send_text(phone, "⛔ Comando restrito a administradores.")
             return
 
         sub = cmd_parts[1] if len(cmd_parts) > 1 else "dashboard"
@@ -151,9 +145,9 @@ async def handle_command(phone: str, command: str, push_name: str):
         elif sub == "enviar" and len(cmd_parts) >= 3:
             notify_phone = cmd_parts[2]
             tracking_code = " ".join(cmd_parts[3:]) if len(cmd_parts) > 3 else ""
-            await send_text(phone, f"Função de envio em desenvolvimento.")
+            await cloud_api.send_text(phone, f"Função de envio em desenvolvimento.")
         else:
-            await send_text(phone, (
+            await cloud_api.send_text(phone, (
                 "📋 *Comandos Admin:*\n"
                 "/admin dashboard — visão geral\n"
                 "/admin enviar [telefone] [codigo] — marcar como enviado\n"
@@ -161,7 +155,7 @@ async def handle_command(phone: str, command: str, push_name: str):
             ))
 
     elif cmd == "/ajuda" or cmd == "/help":
-        await send_text(phone, (
+        await cloud_api.send_text(phone, (
             "❓ *Ajuda ZAPTURBO*\n\n"
             "• Fale naturalmente sobre o que procura\n"
             "• /catalogo — Ver todos os produtos\n"
@@ -227,7 +221,7 @@ async def _process_llm_actions(phone: str, user_msg: str, llm_response: str):
                     msg += f"📏 Tam: {', '.join(tamanhos)}\n\n"
 
                 msg += "Me fala qual te interessou, a cor e o tamanho! 😊"
-                await send_text(phone, msg)
+                await cloud_api.send_text(phone, msg)
 
         if "cep" in user_lower or "frete" in user_lower:
             cep = _extract_cep(user_msg)
@@ -254,13 +248,13 @@ async def _process_llm_actions(phone: str, user_msg: str, llm_response: str):
                     if total_com_frete >= FREIGHT_FREE_MIN:
                         msg += "🔥 *Frete grátis* para esta compra!\n"
                     msg += "\nQual seu endereço completo para entrega? (Rua, número, bairro)"
-                    await send_text(phone, msg)
+                    await cloud_api.send_text(phone, msg)
 
         if any(p in user_lower for p in ["endereço", "rua", "avenida", "av.", "travessa"]):
             customer.endereco = user_msg.strip()
             session.add(customer)
             await session.commit()
-            await send_text(phone, (
+            await cloud_api.send_text(phone, (
                 "📍 Endereço registrado com sucesso!\n\n"
                 "Assim que o pagamento for confirmado, já separamos seu pedido! ✅"
             ))
@@ -274,7 +268,7 @@ async def _process_llm_actions(phone: str, user_msg: str, llm_response: str):
                     session.add(customer_data)
                     await session.commit()
 
-    await send_text(phone, llm_response)
+    await cloud_api.send_text(phone, llm_response)
 
 
 async def _check_and_start_checkout(phone: str):
@@ -314,10 +308,10 @@ async def _check_and_start_checkout(phone: str):
             f"⌛ Prazo para pagamento: 10 minutos\n\n"
             f"Após o pagamento confirmar, peço seu endereço! ✅"
         )
-        await send_text(phone, msg)
+        await cloud_api.send_text(phone, msg)
 
         if order.pix_qrcode:
-            await send_text(phone, f"📱 Ou escaneie o QR Code:\n{order.pix_qrcode}")
+            await cloud_api.send_text(phone, f"📱 Ou escaneie o QR Code:\n{order.pix_qrcode}")
 
 
 def _format_order_items(order: Order) -> str:
@@ -385,6 +379,7 @@ async def main():
 
     payment_poller = PaymentPoller(async_session)
     app = web.Application()
+    app.router.add_get("/webhook", handle_webhook)
     app.router.add_post("/webhook", handle_webhook)
 
     port = int(os.getenv("PORT", "10000"))

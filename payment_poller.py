@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 
 import pix_gateway
-import evolution_client
+import cloud_api
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ class PaymentPoller:
                 if order.created_at and datetime.utcnow() - order.created_at > timedelta(minutes=EXPIRATION_MINUTES):
                     order.status = OrderStatus.CANCELLED
                     await session.commit()
-                    await evolution_client.send_text(
+                    await cloud_api.send_text(
                         order.phone,
                         f"⏰ O prazo de pagamento do pedido #{order.id} expirou.\n"
                         f"Se ainda quiser, é só pedir um novo PIX! 😊"
@@ -75,7 +75,7 @@ class PaymentPoller:
 
                     await session.commit()
 
-                    await evolution_client.send_text(
+                    await cloud_api.send_text(
                         order.phone,
                         f"✅ *Pagamento confirmado!* Pedido #{order.id} no valor de "
                         f"R$ {order.total:.2f}\n\n"
