@@ -1,22 +1,40 @@
 import os
-import aiohttp
+import time
+import threading
 
-BRIDGE_URL = os.getenv("BRIDGE_URL", "http://localhost:8080")
+_outbox = []
+_outbox_lock = threading.Lock()
+_id_counter = 0
 
 
 async def send_text(to: str, text: str) -> dict:
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.post(f"{BRIDGE_URL}/send", json={"to": to, "text": text}, timeout=15) as r:
-                return await r.json()
-    except Exception as e:
-        return {"error": str(e)}
+    global _id_counter
+
+    with _outbox_lock:
+        _id_counter += 1
+        _outbox.append({
+            "id": _id_counter,
+            "to": to,
+            "text": text,
+            "created_at": time.time(),
+        })
+
+    return {"ok": True, "id": _id_counter}
+
+
+def get_outbox_messages() -> list[dict]:
+    with _outbox_lock:
+        return list(_outbox)
+
+
+def mark_message_sent(msg_id: int):
+    with _outbox_lock:
+        for i, msg in enumerate(_outbox):
+            if msg["id"] == msg_id:
+                _outbox.pop(i)
+                return True
+    return False
 
 
 async def check_status() -> dict:
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(f"{BRIDGE_URL}/", timeout=10) as r:
-                return await r.json()
-    except Exception:
-        return {"status": "offline"}
+    return {"status": "ok", "queue_size": len(_outbox)}

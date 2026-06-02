@@ -374,9 +374,23 @@ async def main():
     async def health(request):
         return web.json_response({"status": "ok", "service": "zapturbo-bot"})
 
+    async def handle_outbox(request):
+        msgs = bridge_client.get_outbox_messages()
+        return web.json_response({"messages": msgs})
+
+    async def handle_outbox_sent(request):
+        msg_id = request.match_info.get("id", "")
+        try:
+            bridge_client.mark_message_sent(int(msg_id))
+            return web.json_response({"ok": True})
+        except (ValueError, IndexError):
+            return web.json_response({"ok": False}, status=400)
+
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
     app.router.add_post("/webhook", handle_webhook)
+    app.router.add_get("/outbox", handle_outbox)
+    app.router.add_post("/outbox/{id}/sent", handle_outbox_sent)
 
     port = int(os.getenv("PORT", "10000"))
     runner = web.AppRunner(app)
