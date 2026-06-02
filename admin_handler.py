@@ -2,7 +2,7 @@ import os
 from typing import Optional
 from sqlalchemy import select
 
-import cloud_api
+import bridge_client
 
 ADMIN_PHONES = [p.strip() for p in os.getenv("ADMIN_PHONES", "").split(",") if p.strip()]
 
@@ -35,7 +35,7 @@ async def notify_new_order(session, order_id: int, phone: str, total: float):
         if customer and customer.nome:
             msg += f"\n👤 Nome: {customer.nome}"
 
-        await cloud_api.send_text(admin_phone, msg)
+        await bridge_client.send_text(admin_phone, msg)
 
 
 async def notify_status_change(phone: str, order_id: int, new_status: str, tracking: Optional[str] = None):
@@ -54,7 +54,7 @@ async def notify_status_change(phone: str, order_id: int, new_status: str, track
     elif new_status == "paid":
         msg += "Agora preciso do seu endereço para envio! 📍"
 
-    await cloud_api.send_text(phone, msg)
+    await bridge_client.send_text(phone, msg)
 
 
 async def send_admin_dashboard(session, admin_phone: str):
@@ -78,4 +78,4 @@ async def send_admin_dashboard(session, admin_phone: str):
 
         msg += f"{label}: {count}\n"
 
-    await cloud_api.send_text(admin_phone, msg)
+    await bridge_client.send_text(admin_phone, msg)
