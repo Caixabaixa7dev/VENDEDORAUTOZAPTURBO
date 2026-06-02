@@ -379,6 +379,11 @@ async def main():
 
     payment_poller = PaymentPoller(async_session)
     app = web.Application()
+    async def health(request):
+        return web.json_response({"status": "ok", "service": "zapturbo-bot"})
+
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
     app.router.add_get("/webhook", handle_webhook)
     app.router.add_post("/webhook", handle_webhook)
 
