@@ -3,6 +3,9 @@ import logging
 from datetime import datetime, timedelta
 from sqlalchemy import select
 
+import pix_gateway
+import evolution_client
+
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL = 30
@@ -10,10 +13,8 @@ EXPIRATION_MINUTES = 10
 
 
 class PaymentPoller:
-    def __init__(self, session_factory, pix_gateway, evolution_client):
+    def __init__(self, session_factory):
         self.session_factory = session_factory
-        self.pix_gateway = pix_gateway
-        self.evolution = evolution_client
         self._running = False
 
     async def start(self):
@@ -29,7 +30,7 @@ class PaymentPoller:
         self._running = False
 
     async def _check_pending_payments(self):
-        from models import Order, OrderStatus, Wallet, WalletTransaction, TransactionType, TransactionStatus, Customer
+        from models import Order, OrderStatus, Wallet, WalletTransaction, TransactionType, TransactionStatus
 
         async with self.session_factory() as session:
             result = await session.execute(
@@ -44,14 +45,14 @@ class PaymentPoller:
                 if order.created_at and datetime.utcnow() - order.created_at > timedelta(minutes=EXPIRATION_MINUTES):
                     order.status = OrderStatus.CANCELLED
                     await session.commit()
-                    await self.evolution.send_text(
+                    await evolution_client.send_text(
                         order.phone,
                         f"⏰ O prazo de pagamento do pedido #{order.id} expirou.\n"
                         f"Se ainda quiser, é só pedir um novo PIX! 😊"
                     )
                     continue
 
-                status = await self.pix_gateway.check_deposit_status(order.pix_external_id)
+                status = await pix_gateway.check_deposit_status(order.pix_external_id)
                 if status == "COMPLETED":
                     order.status = OrderStatus.PAID
 
@@ -74,7 +75,7 @@ class PaymentPoller:
 
                     await session.commit()
 
-                    await self.evolution.send_text(
+                    await evolution_client.send_text(
                         order.phone,
                         f"✅ *Pagamento confirmado!* Pedido #{order.id} no valor de "
                         f"R$ {order.total:.2f}\n\n"

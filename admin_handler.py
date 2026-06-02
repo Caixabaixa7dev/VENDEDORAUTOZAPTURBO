@@ -1,7 +1,8 @@
 import os
 from typing import Optional
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+
+import evolution_client
 
 ADMIN_PHONES = [p.strip() for p in os.getenv("ADMIN_PHONES", "").split(",") if p.strip()]
 
@@ -10,13 +11,8 @@ def is_admin(phone: str) -> bool:
     return phone in ADMIN_PHONES
 
 
-async def notify_new_order(session: AsyncSession, evolution_client, order_id: int, phone: str, total: float):
+async def notify_new_order(session, order_id: int, phone: str, total: float):
     from models import Order, OrderItem, Customer, Product, ProductVariant
-
-    result = await session.execute(select(Order).where(Order.id == order_id))
-    order = result.scalar_one_or_none()
-    if not order or not is_admin(phone) and phone != order.phone:
-        return
 
     for admin_phone in ADMIN_PHONES:
         items_result = await session.execute(
@@ -28,7 +24,8 @@ async def notify_new_order(session: AsyncSession, evolution_client, order_id: in
         for item in items:
             prod = await session.get(Product, item.product_id)
             var = await session.get(ProductVariant, item.variant_id) if item.variant_id else None
-            msg += f"• {prod.nome} ({var.cor}/{var.tamanho}) x{item.quantidade}\n"
+            var_str = f" ({var.cor}/{var.tamanho})" if var else ""
+            msg += f"• {prod.nome}{var_str} x{item.quantidade}\n"
 
         msg += f"\n💰 Total: R$ {total:.2f}"
         msg += f"\n📱 Cliente: {phone}"
@@ -41,7 +38,7 @@ async def notify_new_order(session: AsyncSession, evolution_client, order_id: in
         await evolution_client.send_text(admin_phone, msg)
 
 
-async def notify_status_change(evolution_client, phone: str, order_id: int, new_status: str, tracking: Optional[str] = None):
+async def notify_status_change(phone: str, order_id: int, new_status: str, tracking: Optional[str] = None):
     status_labels = {
         "paid": "✅ Pago",
         "shipped": "📦 Enviado",
@@ -60,15 +57,13 @@ async def notify_status_change(evolution_client, phone: str, order_id: int, new_
     await evolution_client.send_text(phone, msg)
 
 
-async def send_admin_dashboard(session: AsyncSession, evolution_client, admin_phone: str):
+async def send_admin_dashboard(session, admin_phone: str):
     from models import Order, OrderStatus
 
     msg = "📊 *Dashboard ZAPTURBO*\n\n"
 
     for status in OrderStatus:
-        result = await session.execute(
-            select(Order).where(Order.status == status)
-        )
+        result = await session.execute(select(Order).where(Order.status == status))
         count = len(result.scalars().all())
 
         label = {

@@ -147,7 +147,7 @@ async def handle_command(phone: str, command: str, push_name: str):
 
         if sub == "dashboard":
             async with async_session() as session:
-                await send_admin_dashboard(session, None, phone)
+                await send_admin_dashboard(session, phone)
         elif sub == "enviar" and len(cmd_parts) >= 3:
             notify_phone = cmd_parts[2]
             tracking_code = " ".join(cmd_parts[3:]) if len(cmd_parts) > 3 else ""
@@ -383,7 +383,7 @@ async def main():
         await seed_database(session)
     logger.info("Catálogo verificado/populado")
 
-    payment_poller = PaymentPoller(async_session, None, None)
+    payment_poller = PaymentPoller(async_session)
     app = web.Application()
     app.router.add_post("/webhook", handle_webhook)
 

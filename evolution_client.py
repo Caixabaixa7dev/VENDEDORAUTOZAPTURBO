@@ -2,88 +2,53 @@ import os
 import aiohttp
 from typing import Optional
 
-EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "http://localhost:8080")
-EVOLUTION_API_KEY = os.getenv("EVOLUTION_API_KEY", "")
-EVOLUTION_INSTANCE_NAME = os.getenv("EVOLUTION_INSTANCE_NAME", "zapturbo")
+BRIDGE_URL = os.getenv("BRIDGE_URL", "http://localhost:8080")
+BOT_PORT = os.getenv("PORT", "10000")
+BOT_PUBLIC_URL = os.getenv("BOT_PUBLIC_URL", f"http://localhost:{BOT_PORT}")
 
 
 async def send_text(to: str, text: str) -> dict:
-    payload = {
-        "number": to,
-        "text": text,
-        "delay": 1200,
-    }
-    return await _post("/message/sendText", payload)
+    payload = {"to": to, "text": text}
+    return await _post("/send", payload)
 
 
 async def send_image(to: str, image_url: str, caption: Optional[str] = None) -> dict:
-    payload = {
-        "number": to,
-        "media": image_url,
-        "caption": caption or "",
-        "delay": 1200,
-    }
-    return await _post("/message/sendMedia", payload)
-
-
-async def send_buttons(to: str, text: str, buttons: list[list[str]]) -> dict:
-    payload = {
-        "number": to,
-        "title": text,
-        "description": "",
-        "footer": "ZAPTURBO",
-        "buttons": buttons,
-        "delay": 1200,
-    }
-    return await _post("/message/sendButtons", payload)
-
-
-async def send_list(to: str, title: str, description: str, sections: list[dict]) -> dict:
-    payload = {
-        "number": to,
-        "title": title,
-        "description": description,
-        "footerText": "ZAPTURBO",
-        "sections": sections,
-    }
-    return await _post("/message/sendList", payload)
+    payload = {"to": to, "imageUrl": image_url, "caption": caption or ""}
+    return await _post("/send-image", payload)
 
 
 async def _post(endpoint: str, payload: dict) -> dict:
-    url = f"{EVOLUTION_API_URL}/{EVOLUTION_INSTANCE_NAME}{endpoint}"
-    headers = {
-        "Content-Type": "application/json",
-        "apikey": EVOLUTION_API_KEY,
-    }
+    url = f"{BRIDGE_URL}{endpoint}"
     async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload, headers=headers, timeout=15) as resp:
-            data = await resp.json()
-            return data
+        try:
+            async with session.post(url, json=payload, timeout=15) as resp:
+                data = await resp.json()
+                return data
+        except Exception as e:
+            return {"error": str(e)}
 
 
 async def check_connection() -> bool:
-    url = f"{EVOLUTION_API_URL}/{EVOLUTION_INSTANCE_NAME}/connectionState"
-    headers = {"apikey": EVOLUTION_API_KEY}
+    url = f"{BRIDGE_URL}/"
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, timeout=10) as resp:
+            async with session.get(url, timeout=10) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return data.get("state", "") == "open"
+                    return data.get("status") == "connected"
                 return False
     except Exception:
         return False
 
 
-async def get_qrcode() -> Optional[str]:
-    url = f"{EVOLUTION_API_URL}/{EVOLUTION_INSTANCE_NAME}/qrcode"
-    headers = {"apikey": EVOLUTION_API_KEY}
+async def get_qr_code() -> Optional[str]:
+    url = f"{BRIDGE_URL}/qr"
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, timeout=10) as resp:
+            async with session.get(url, timeout=10) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return data.get("qrcode", {}).get("code")
+                    return data.get("qr")
                 return None
     except Exception:
         return None
