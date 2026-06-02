@@ -5,5 +5,3 @@ __pycache__/
 logs.txt
 static/banner.jpg
 .DS_Store
-whatsapp-bridge/node_modules/
-whatsapp-bridge/session/
